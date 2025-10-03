@@ -1,0 +1,27 @@
+[package]
+name = "bond-tcp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+random-number = "0.1.9"
+bincode = "2.0.1"
+uuid = { version = "1.18.1", features = [ "v4" ]}
+log = "0.4"
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+tracing-log = { version = "0.2", optional = true }
+
+[features]
+default = []
+examples = ["tracing", "tracing-subscriber", "tracing-log"]
+
+[[example]]
+name = "hello_server"
+path = "examples/hello_server.rs"
+required-features = ["examples"]
+
+[[example]]
+name = "hello_client"
+path = "examples/hello_client.rs"
+required-features = ["examples"]
