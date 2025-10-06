@@ -101,7 +101,7 @@
 //! - Overhead exists for managing multiple connections, so bonding may not 
 //!   benefit very short-lived connections
 
-#![deny(unsafe_code)]
+
 #![warn(missing_docs)]
 
 mod bond_tcp;

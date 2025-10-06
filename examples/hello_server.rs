@@ -1,7 +1,8 @@
 
-use tracing::{debug, info, warn, error};
+use std::time::Duration;
+use std::io::Read;
+
 use tracing_subscriber::filter::EnvFilter;
-use std::io::{Read, Write};
 
 fn init_env_filter(env_filter: EnvFilter) {
     let subscriber = tracing_subscriber::fmt()
@@ -27,8 +28,19 @@ fn main() -> std::io::Result<()> {
     println!("Waiting for 3 connections to bond together");
     
     let mut listener = bond_tcp::BondTcpListener::bind("127.0.0.1:7890", 3)?;
-    if let Ok((_, addr)) =  listener.accept() {
+    if let Ok((mut stream, addr)) =  listener.accept() {
         println!("Accepted connection from: {addr}");
+        let mut buf = [0u8; 8192];
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let n = stream.read(&mut buf)?;
+            println!("Read {n} bytes:\n");
+            for b in buf {
+                print!("{b}:");
+            }
+            println!("");
+
+        }
     } else {
         println!("Failed to accept connection!");
     }

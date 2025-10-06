@@ -1,7 +1,5 @@
-use tracing::{info, error};
-use std::io::{Write, Read};
-use std::thread;
 use std::time::Duration;
+use std::io::Write;
 use tracing_subscriber::filter::EnvFilter;
 
 fn init_env_filter(env_filter: EnvFilter) {
@@ -28,7 +26,14 @@ fn main() -> std::io::Result<()> {
     println!("Creating 3 connections to 127.0.0.1:7890 to form a bond");
     let mut stream = bond_tcp::BondTcpStream::connect("127.0.0.1:7890")?;
     println!("Connected successfully");
-
-    thread::sleep(Duration::from_secs(5));
-    Ok(())
+    
+    let mut buf = [0u8;4096];
+    loop {
+        let n = stream.write(&buf)?;
+        println!("Wrote {n} bytes");
+        for i in 0..buf.len() {
+            buf[i] = ((buf[i] + 1) %255) as u8
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }    
 }

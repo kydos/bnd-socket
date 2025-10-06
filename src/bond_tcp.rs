@@ -66,8 +66,10 @@ use uuid::Uuid;
 pub struct BondTcpListener {
     listener: TcpListener,
     stream_num: u8,
-    accepted_connections: HashMap<uuid::Uuid, std::vec::Vec<TcpStream>>    
+    accepted_connections: HashMap<uuid::Uuid, std::vec::Vec<TcpStream>>,
 }
+
+const FRAGMENT_SIZE: usize = 8192;
 
 impl BondTcpListener {
     /// Creates a new `BndTcpListener` which will be bound to the specified address.
@@ -76,7 +78,7 @@ impl BondTcpListener {
         Ok(BondTcpListener {
             listener,
             stream_num,
-            accepted_connections: HashMap::new()            
+            accepted_connections: HashMap::new(),          
         })
     }    /// Returns the local address that this listener is bound to.
     pub fn local_addr(&self) -> IoResult<SocketAddr> {
@@ -90,6 +92,8 @@ impl BondTcpListener {
 
     /// Accept a new incoming connection from this listener.
     pub fn accept(&mut self) -> IoResult<(BondTcpStream, SocketAddr)> {
+        let r_poller = polling::Poller::new().unwrap();
+        let w_poller = polling::Poller::new().unwrap();
         loop {
             let mut cid_buf = [0u8; 16];
             let (mut stream, addr) = self.listener.accept()?;
@@ -103,15 +107,35 @@ impl BondTcpListener {
                     if streams.len() + 1 == self.stream_num as usize {
                         log::debug!("We have already {} connections with {cid} accepting the session", streams.len());
                         streams.push(stream);                        
-                        return Ok((BondTcpStream { streams }, addr));
+                        let mut id = 0;
+                        for s in streams.iter() {
+                            s.set_nonblocking(true)?;
+                            unsafe {
+                                let _ = r_poller.add(s, polling::Event::none(id));
+                                let _ = w_poller.add(s, polling::Event::none(id));
+                            }                                                  
+                            id += 1;
+                        }
+                        return Ok((BondTcpStream { streams, r_poller, w_poller, next_stream: 0, readable: 0 }, addr));
                     }
                     else {
                         log::debug!("{} connection with {cid}", streams.len() + 1);    
+                        // stream.set_nonblocking(true)?;
+                        // unsafe {
+                        //     let _ = r_poller.add(&stream, polling::Event::none(streams.len()));
+                        //     let _ = w_poller.add(&stream, polling::Event::none(streams.len()));
+                        // }                                                  
                         streams.push(stream);                
-                        self.accepted_connections.insert(cid, streams);                        
+                        self.accepted_connections.insert(cid, streams);                         
                     }
                 },
                 None => {
+                    // stream.set_nonblocking(true)?;
+                    // unsafe {
+                    //     let _ = r_poller.add(&stream, polling::Event::none(0));
+                    //     let _ = w_poller.add(&stream, polling::Event::none(0));
+                    // }
+
                     let cid = uuid::Uuid::new_v4();
                     log::debug!("First connection with {addr} associating it with cid: {cid}");                    
                     // Inform the other side about the number of socket to be opened.
@@ -137,7 +161,7 @@ impl BondTcpListener {
     }
 
     /// Sets the value for the `IP_TTL` option on this socket.
-    pub fn set_ttl(&self, ttl: u32) -> IoResult<()> {
+    pub fn set_ttl(&self, _ttl: u32) -> IoResult<()> {
         // TODO: Implement set_ttl
         todo!()
     }
@@ -149,7 +173,7 @@ impl BondTcpListener {
     }
 
     /// Sets the value for the `SO_REUSEADDR` option on this socket.
-    pub fn set_nonblocking(&self, nonblocking: bool) -> IoResult<()> {
+    pub fn set_nonblocking(&self, _nonblocking: bool) -> IoResult<()> {
         // TODO: Implement set_nonblocking
         todo!()
     }
@@ -163,7 +187,7 @@ impl BondTcpListener {
 
 /// An iterator that infinitely accepts connections on a `BndTcpListener`.
 pub struct Incoming<'a> {
-    listener: &'a BondTcpListener,
+    _listener: &'a BondTcpListener,
 }
 
 impl<'a> Iterator for Incoming<'a> {
@@ -185,19 +209,31 @@ impl<'a> Iterator for Incoming<'a> {
 /// `BondTcpStream` provides the same interface as a standard `TcpStream` but with
 /// the performance benefits of multiple parallel connections.
 pub struct BondTcpStream {
-    streams: std::vec::Vec<TcpStream>
+    streams: std::vec::Vec<TcpStream>,
+    r_poller: polling::Poller,
+    w_poller: polling::Poller,
+    next_stream: usize,
+    readable: usize
 }
 
 impl BondTcpStream {
     /// Opens a TCP connection to a remote host.
     
     pub fn connect<A: ToSocketAddrs>(addr: A) -> IoResult<BondTcpStream> {
+        let r_poller = polling::Poller::new().unwrap();
+        let w_poller = polling::Poller::new().unwrap();
         let mut addresses = vec![]; 
         for a in addr.to_socket_addrs().unwrap() {
             addresses.push(a.clone());
         }        
         let tid = uuid::Uuid::new_v4();
-        let mut stream = TcpStream::connect(addresses.as_slice())?;
+        let mut stream = TcpStream::connect(addresses.as_slice())?;        
+        // stream.set_nonblocking(true)?;
+        // unsafe {
+        //     let _ = r_poller.add(&stream, polling::Event::none(0));
+        //     let _ = w_poller.add(&stream, polling::Event::none(0));
+        // }
+
         log::debug!("Established first connection, sending challenge");            
         stream.write(&tid.to_bytes_le())?;        
         let _ = stream.flush();
@@ -211,20 +247,34 @@ impl BondTcpStream {
         log::debug!("CID: {}", Uuid::from_bytes_le(cid_buf.clone()));
         let mut streams = vec![stream];
         
-        for _ in 1..ns {
+        for _ in 1..ns {           
             log::debug!("Establishing another connection");
-            let mut s = TcpStream::connect(addresses.as_slice())?;
+            let mut s = TcpStream::connect(addresses.as_slice())?;            
+            // s.set_nonblocking(true)?;
+            // unsafe {                
+            //     let _ = r_poller.add(&s, polling::Event::none(i as usize));
+            //     let _ = w_poller.add(&s, polling::Event::none(i as usize));
+            // }
             log::debug!("Sending UUID: {}", Uuid::from_bytes_le(cid_buf.clone()));
             let _ = s.write(&cid_buf)?;
             let _ = s.flush();
-            streams.push(s);
+            streams.push(s);            
         }
         
-        Ok (BondTcpStream { streams })        
+        let mut id = 0;
+        for s in streams.iter() {
+            let _ = s.set_nonblocking(true);
+            unsafe {
+                let _ = r_poller.add(s, polling::Event::none(id));
+                let _ = w_poller.add(s, polling::Event::none(id));
+                id += 1;
+            }
+        }
+        Ok (BondTcpStream { streams, r_poller, w_poller, next_stream: 0, readable: 0 })        
     }
 
     /// Opens a TCP connection to a remote host with a timeout.
-    pub fn connect_timeout(addr: &SocketAddr, timeout: Duration) -> IoResult<BondTcpStream> {
+    pub fn connect_timeout(_addr: &SocketAddr, _timeout: Duration) -> IoResult<BondTcpStream> {
         // TODO: Implement connect_timeout
         todo!()
     }
@@ -242,7 +292,7 @@ impl BondTcpStream {
     }
 
     /// Shuts down the read, write, or both halves of this connection.
-    pub fn shutdown(&self, how: std::net::Shutdown) -> IoResult<()> {
+    pub fn shutdown(&self, _how: std::net::Shutdown) -> IoResult<()> {
         // TODO: Implement shutdown
         todo!()
     }
@@ -254,13 +304,13 @@ impl BondTcpStream {
     }
 
     /// Sets the read timeout to the timeout specified.
-    pub fn set_read_timeout(&self, dur: Option<Duration>) -> IoResult<()> {
+    pub fn set_read_timeout(&self, _dur: Option<Duration>) -> IoResult<()> {
         // TODO: Implement set_read_timeout
         todo!()
     }
 
     /// Sets the write timeout to the timeout specified.
-    pub fn set_write_timeout(&self, dur: Option<Duration>) -> IoResult<()> {
+    pub fn set_write_timeout(&self, _dur: Option<Duration>) -> IoResult<()> {
         // TODO: Implement set_write_timeout
         todo!()
     }
@@ -278,13 +328,13 @@ impl BondTcpStream {
     }
 
     /// Receives data on the socket from the remote address to which it is connected.
-    pub fn peek(&self, buf: &mut [u8]) -> IoResult<usize> {
+    pub fn peek(&self, _buf: &mut [u8]) -> IoResult<usize> {
         // TODO: Implement peek
         todo!()
     }
 
     /// Sets the value of the `TCP_NODELAY` option on this socket.
-    pub fn set_nodelay(&self, nodelay: bool) -> IoResult<()> {
+    pub fn set_nodelay(&self, _nodelay: bool) -> IoResult<()> {
         // TODO: Implement set_nodelay
         todo!()
     }
@@ -296,7 +346,7 @@ impl BondTcpStream {
     }
 
     /// Sets the value for the `IP_TTL` option on this socket.
-    pub fn set_ttl(&self, ttl: u32) -> IoResult<()> {
+    pub fn set_ttl(&self, _ttl: u32) -> IoResult<()> {
         // TODO: Implement set_ttl
         todo!()
     }
@@ -314,23 +364,126 @@ impl BondTcpStream {
     }
 
     /// Moves this TCP stream into or out of nonblocking mode.
-    pub fn set_nonblocking(&self, nonblocking: bool) -> IoResult<()> {
+    pub fn set_nonblocking(&self, _nonblocking: bool) -> IoResult<()> {
         // TODO: Implement set_nonblocking
         todo!()
     }
+
+    fn write_loop(&mut self, buf: &[u8]) -> IoResult<usize> {        
+        let n = self.streams[self.next_stream].write(buf)?;        
+        if n < buf.len() {
+            let mut index = n;
+            let mut events = polling::Events::new();
+            loop {
+                events.clear();
+                let _ = self.w_poller.modify(&self.streams[self.next_stream], polling::Event::writable(self.next_stream));
+                let _ = self.w_poller.wait(&mut events, None)?;
+                for e in events.iter() {
+                    if e.key == self.next_stream {
+                        let n = self.streams[self.next_stream].write(&buf[index..buf.len()])?;
+                        index += n;                    
+                    }
+                    if index == buf.len() {
+                        break;
+                    }
+                }                                    
+            }
+        }            
+        Ok(buf.len())
+    }
+
+    fn read_loop(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        let mut n = match self.streams[self.next_stream].read(buf) {
+            Ok(n) => n,
+            Err(_) => 0
+        };
+        let len = buf.len();        
+        let mut events = polling::Events::new();
+        while n < len {
+            events.clear();
+            self.r_poller.modify(
+                &self.streams[self.next_stream], 
+                polling::Event::readable(self.next_stream))?;
+            let _ = self.r_poller.wait(&mut events, None)?;
+            for e in events.iter() {
+                if e.key == self.next_stream {
+                    n += self.streams[self.next_stream].read(&mut buf[n..len])?;                    
+                }
+            }
+        }
+        Ok(buf.len())
+    }
+    fn read_frame_len(&mut self) -> IoResult<usize> {
+        let mut len_bs = [0u8; 4]; 
+        let _ = self.read_loop(&mut len_bs)?;
+        let len = u32::from_le_bytes(len_bs) as usize;
+        Ok(len)
+    }
+
+    fn read_readable(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        if self.readable > 0  {        
+            let len = std::cmp::min(self.readable, buf.len());    
+            let n = self.read_loop(&mut buf[0..len])?;
+            if n == self.readable {
+                self.next_stream = (self.next_stream + 1) % self.streams.len();
+                self.readable = 0;
+            } else {
+                self.readable -= n;
+            }
+            Ok(n)
+        } else {
+            Ok(0)
+        }
+    }
+
 }
 
 impl std::io::Read for BondTcpStream {
-    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
-        // TODO: Implement Read trait
-        todo!()
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {        
+        log::debug!("Reading using stream {}", self.next_stream);
+        let buf_len = buf.len();
+        let mut n = self.read_readable(buf)?;
+        while n < buf.len() {
+            let len = self.read_frame_len()?;
+            log::debug!("Frame Len: {len}");
+            if len > buf.len() - n {
+                self.readable = len - (buf.len() - n);
+                n += self.read_loop(&mut buf[n..buf_len])?;                
+            } else {
+                self.readable = 0;                
+                n += self.read_loop(&mut buf[n..buf_len])?;
+                self.next_stream = (self.next_stream + 1) % self.streams.len();                
+            }
+        }       
+        self.next_stream = (self.next_stream + 1) % self.streams.len();                
+        log::debug!("Read  {} bytes, next will read from stream {}/{}", buf.len(), self.next_stream, self.streams.len());
+        
+        Ok(buf.len())
     }
 }
 
 impl std::io::Write for BondTcpStream {
+
+
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        // TODO: Implement Write trait
-        todo!()
+        log::debug!("Writing using stream {}", self.next_stream);
+        if buf.len() < FRAGMENT_SIZE {
+            let len_bs = (buf.len() as u32).to_le_bytes();                        
+            let _ = self.write_loop(&len_bs)?;
+            let _ = self.write_loop(buf)?;            
+        } else {            
+            let mut sup = FRAGMENT_SIZE;
+            let mut k = 0;
+            while sup < buf.len() {
+                let inf = k * FRAGMENT_SIZE;
+                k += 1;
+                sup = std::cmp::min(k*FRAGMENT_SIZE, buf.len());
+                let _ = self.write_loop(&buf[inf..sup])?;                
+            }            
+        }
+        self.next_stream = (self.next_stream +1 ) % self.streams.len();
+        Ok(buf.len())
+         
     }
 
     fn flush(&mut self) -> IoResult<()> {
