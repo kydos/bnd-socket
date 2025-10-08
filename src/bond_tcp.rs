@@ -238,12 +238,7 @@ impl BondTcpStream {
             addresses.push(a);
         }        
         let tid = uuid::Uuid::new_v4();
-        let mut stream = TcpStream::connect(addresses.as_slice())?;        
-        // stream.set_nonblocking(true)?;
-        // unsafe {
-        //     let _ = r_poller.add(&stream, polling::Event::none(0));
-        //     let _ = w_poller.add(&stream, polling::Event::none(0));
-        // }
+        let mut stream = TcpStream::connect(addresses.as_slice())?;                
 
         log::debug!("Established first connection, sending challenge");            
         let _ = stream.write(&tid.to_bytes_le())?;        
@@ -262,12 +257,7 @@ impl BondTcpStream {
         
             for _ in 1..ns {           
                 log::debug!("Establishing another connection");
-                let mut s = TcpStream::connect(addresses.as_slice())?;            
-                // s.set_nonblocking(true)?;
-                // unsafe {                
-                //     let _ = r_poller.add(&s, polling::Event::none(i as usize));
-                //     let _ = w_poller.add(&s, polling::Event::none(i as usize));
-                // }
+                let mut s = TcpStream::connect(addresses.as_slice())?;                            
                 log::debug!("Sending UUID: {}", Uuid::from_bytes_le(cid_buf));
                 let _ = s.write(&cid_buf)?;
                 let _ = s.flush();
@@ -276,6 +266,7 @@ impl BondTcpStream {
             
             for (id, s) in streams.iter().enumerate() {
                 let _ = s.set_nonblocking(true);
+                let _ = s.set_nodelay(true);
                 unsafe {
                     let _ = r_poller.add(s, polling::Event::none(id));
                     let _ = w_poller.add(s, polling::Event::none(id));        
@@ -284,6 +275,7 @@ impl BondTcpStream {
             Ok (BondTcpStream { streams, r_poller, w_poller, next_stream: 0, readable: 0 })        
         } else {
             let _ = stream.set_nonblocking(true);
+            let _ = stream.set_nodelay(true);
                 unsafe {
                     let _ = r_poller.add(&stream, polling::Event::none(0));
                     let _ = w_poller.add(&stream, polling::Event::none(0));        
@@ -388,7 +380,8 @@ impl BondTcpStream {
         todo!()
     }
 
-    fn write_loop(&mut self, buf: &[u8]) -> IoResult<usize> {        
+    fn write_loop(&mut self, buf: &[u8]) -> IoResult<usize> {   
+        log::debug!("write_loop for {} bytes", buf.len());
         let n = match self.streams[self.next_stream].write(buf) {
             Ok(n) => if n > 0 { n } else { return Ok(0) },
             Err(e) => {
@@ -404,24 +397,23 @@ impl BondTcpStream {
             loop {
                 events.clear();
                 let _ = self.w_poller.modify(&self.streams[self.next_stream], polling::Event::writable(self.next_stream));                
-                log::debug!("Polling for writing data");
+                log::trace!("Polling for writing data");
                 let n = self.w_poller.wait(&mut events, None)?;
-                log::debug!("Polled {} events", n);
+                log::trace!("Polled {} events", n);
                 for e in events.iter() {
-                    log::debug!("{:?}", e);
+                    log::trace!("{:?}", e);
                     if e.key == self.next_stream {
-                        log::debug!("writing buf[{}..{}]",index, buf.len());
+                        log::trace!("writing buf[{}..{}]",index, buf.len());
                         let n = self.streams[self.next_stream].write(&buf[index..buf.len()])?;
-                        log::debug!("Actually wrote {n} bytes");
-                        if n == 0 {
+                        log::trace!("Actually wrote {n} bytes");
+                        if n == 0 {                            
                             return Ok(0)
-                        }
-                        
+                        }                        
                         index += n;                    
                     }
-                    log::debug!("Index: {index} buf.len(): {}", buf.len());
+                    log::trace!("Index: {index} buf.len(): {}", buf.len());
                     if index == buf.len() {
-                        return Ok(buf.len())
+                        return Ok   (buf.len())
                     }
                 }                                    
             }
@@ -430,6 +422,7 @@ impl BondTcpStream {
     }
 
     fn read_loop(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        log::debug!("read_loop for {} bytes", buf.len());
         let mut n = match self.streams[self.next_stream].read(buf) {
             Ok(n) => if n > 0 { n } else { return Ok(0) },
             Err(e) => {
@@ -439,11 +432,11 @@ impl BondTcpStream {
             }
         };
         
-        log::debug!("read_loop>> Read {} bytes", n);
+        log::trace!("read_loop>> Read {} bytes", n);
         let len = buf.len();        
         let mut events = polling::Events::new();
         while n < len {
-            log::debug!("read_loop>> Looping to read another {} bytes", len - n);
+            log::trace!("read_loop>> Looping to read another {} bytes", len - n);
             events.clear();
             self.r_poller.modify(
                 &self.streams[self.next_stream], 
@@ -457,14 +450,15 @@ impl BondTcpStream {
                     } else {
                         return Ok(0)
                     }
-                    log::debug!("read_loop>> Thus far, read  {} bytes", n);                   
+                    log::trace!("read_loop>> Thus far, read  {} bytes", n);                   
                 }
             }
         }
         log::debug!("read_loop>> Read a total of  {} bytes", n);                   
         Ok(n)
     }
-    fn read_frame_len(&mut self) -> IoResult<usize> {
+
+    fn read_frame_len(&mut self) -> IoResult<usize> {        
         let mut len_bs = [0u8; 4]; 
         let n = self.read_loop(&mut len_bs)?;
         log::debug!("read_frame_len>> read-loop read {} bytes", n);
@@ -484,8 +478,10 @@ impl BondTcpStream {
             } else {
                 self.readable -= n;
             }
+            log::debug!("read_readable read {} bytes", n);
             Ok(n)
         } else {
+            log::debug!("read_readable read 0 bytes");
             Ok(0)
         }
     }    
@@ -493,18 +489,18 @@ impl BondTcpStream {
 }
 
 impl std::io::Read for BondTcpStream {
-    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {        
-        log::debug!("Reading using stream {}", self.next_stream);
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {                
+        log::debug!("Reading {} bytes and starting with  stream {}", buf.len(), self.next_stream);
         let buf_len = buf.len();
         let mut n = self.read_readable(buf)?;
-        log::debug!("Read leftover: {} bytes", n);
+        log::trace!("Read leftover: {} bytes", n);
         while n < buf.len() {
             let len = self.read_frame_len()?;
-            log::debug!("Frame Len: {len}");
+            log::trace!("Frame Len: {len}");
             if len > buf.len() - n {
-                log::debug!("Reading the last: {} bytes", (buf.len() - n));
+                log::trace!("Reading the last: {} bytes", (buf.len() - n));
                 self.readable = len - (buf.len() - n);
-                log::debug!("Leftover after I read: {} bytes", self.readable);
+                log::trace!("Leftover after I read: {} bytes", self.readable);
                 let rb = self.read_loop(&mut buf[n..buf_len])?;
                 if rb == 0 { return Ok(0) }
                 else {
@@ -518,9 +514,9 @@ impl std::io::Read for BondTcpStream {
                 else {
                     n += rb;
                 }
-                log::debug!("Read so far: {} bytes", n);
+                log::trace!("Read so far: {} bytes", n);
                 self.next_stream = (self.next_stream + 1) % self.streams.len();                
-                log::debug!("Next read will be from stream: {}", self.next_stream);
+                log::trace!("Next read will be from stream: {}", self.next_stream);
             }
         }       
         log::debug!("Read  {} bytes, next will read from stream {}/{}\n", buf.len(), self.next_stream, self.streams.len());
@@ -533,22 +529,22 @@ impl std::io::Write for BondTcpStream {
 
 
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {        
+        log::debug!("Writing {} bytes", buf.len());
         if buf.len() <= FRAGMENT_SIZE {
-            log::debug!("Writing in one shot using stream {}", self.next_stream);
+            log::trace!("Writing in one shot using stream {}", self.next_stream);
             let len_bs = (buf.len() as u32).to_le_bytes();                        
             let _ = self.write_loop(&len_bs)?;
             let _ = self.write_loop(buf)?;            
             self.next_stream = (self.next_stream +1 ) % self.streams.len();
         } else {            
-            log::debug!("Fragmenting write");
+            log::trace!("Fragmenting write");
             let mut sup = FRAGMENT_SIZE;
             let mut k = 0;                    
             while sup < buf.len() {          
-                log::debug!("Writing fragment {k}");                      
+                log::trace!("Writing fragment {k}");                      
                 let inf = k * FRAGMENT_SIZE;
                 k += 1;
-                sup = std::cmp::min(k*FRAGMENT_SIZE, buf.len());
-                log::debug!("Writing {} bytes on buf[{}..{}] on stream {}", sup - inf,  inf, sup, self.next_stream);
+                sup = std::cmp::min(k*FRAGMENT_SIZE, buf.len());               
                 let len_bs = ((sup - inf) as u32).to_le_bytes();
                 let _ = self.write_loop(&len_bs)?;
                 let n = self.write_loop(&buf[inf..sup])?;
