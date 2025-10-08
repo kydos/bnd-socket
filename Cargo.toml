@@ -9,13 +9,26 @@ random-number = "0.1.9"
 bincode = "2.0.1"
 uuid = { version = "1.18.1", features = [ "v4" ]}
 log = "0.4"
+clap ={ version = "4.5.48", features = ["derive"]}
+
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 tracing-log = { version = "0.2", optional = true }
 
+
+[[bin]]
+name = "bperf"
+path = "bin/bperf.rs"
+
+[[bin]]
+name = "tperf"
+path = "bin/tperf.rs"
+
+
 [features]
 default = []
 examples = ["tracing", "tracing-subscriber", "tracing-log"]
+
 
 [[example]]
 name = "hello_server"

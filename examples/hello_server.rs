@@ -1,6 +1,6 @@
 
-use std::time::Duration;
 use std::io::Read;
+use clap::Parser;
 
 use tracing_subscriber::filter::EnvFilter;
 
@@ -21,28 +21,50 @@ fn main() -> std::io::Result<()> {
     tracing_log::LogTracer::init().expect("Failed to set logger");
     
     // Initialize tracing subscriber
-     let env_filter = EnvFilter::try_from_default_env().unwrap();
-    init_env_filter(env_filter);
+    match EnvFilter::try_from_default_env() {
+        Ok(env_filter) => init_env_filter(env_filter),
+        _ => { }
+     }
+     
+    let args = Args::parse();
+    println!("Starting BondTcpListener server on {}", args.listen);    
     
-    println!("Starting BondTcpListener server on 127.0.0.1:7890");
-    println!("Waiting for 3 connections to bond together");
-    
-    let mut listener = bond_tcp::BondTcpListener::bind("127.0.0.1:7890", 3)?;
+    let mut listener = bond_tcp::BondTcpListener::bind(args.listen, args.bond)?;
     if let Ok((mut stream, addr)) =  listener.accept() {
         println!("Accepted connection from: {addr}");
-        let mut buf = [0u8; 8192];
-        loop {
-            std::thread::sleep(Duration::from_secs(1));
+        let mut buf = vec![0u8; args.size];
+
+        loop {            
             let n = stream.read(&mut buf)?;
-            println!("Read {n} bytes:\n");
-            for b in buf {
-                print!("{b}:");
+            if n == 0 {
+                println!("Socket close from remote party...");
+                break;
             }
-            println!("");
+            print!(".");
+            // println!("Read {n} bytes:\n");
+            // for b in buf.iter() {
+            //     print!("{b}:");
+            // }
+            // println!("");
 
         }
     } else {
         println!("Failed to accept connection!");
     }
     Ok(())
+}
+
+/// A simple server illustrating the use of socket bonding.
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// The server listen address in the formant <ip:port>
+    #[arg(short, long)]
+    listen: String,
+    /// The read buffer size
+    #[arg(short, long)]
+    size: usize,
+    /// The number of socket streams to be bonded
+    #[arg(short, long)]
+    bond: u8
 }
