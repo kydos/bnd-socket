@@ -22,6 +22,7 @@ fn run_client_mode(args: Args) {
 fn run_server_mode(args: Args) { 
     
     let mut listener = bond_tcp::BondTcpListener::bind(args.addr, args.bond).unwrap();
+    let mut sid = 0;
     loop {
         if let Ok((mut stream, addr)) =  listener.accept() {
             println!("Accepted connection from: {addr}");
@@ -29,6 +30,9 @@ fn run_server_mode(args: Args) {
             let mut start = Instant::now();
             let mut total_recv = 0;
             let sampling_period = Duration::from_secs(args.period);
+            let cid = sid;
+            sid += 1;
+            std::thread::spawn(move || {
             loop {            
                 let n = stream.read(&mut buf).unwrap();
 
@@ -40,11 +44,11 @@ fn run_server_mode(args: Args) {
                 let delta = start.elapsed();
                 if  delta >= sampling_period {
                     let throughput = (total_recv as f32 / delta.as_secs_f32()) / ( 10u64.pow(9) as f32);                    
-                    println!("{throughput} Gbps");
+                    println!("[{cid}]: {throughput} Gbps");
                     start = Instant::now();
                     total_recv = 0;
                 }
-        }
+            }});
         } else {
             println!("Failed to accept connection!");
         }
