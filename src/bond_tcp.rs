@@ -69,7 +69,7 @@ pub struct BondTcpListener {
     accepted_connections: HashMap<uuid::Uuid, std::vec::Vec<TcpStream>>,
 }
 
-const FRAGMENT_SIZE: usize = 64*1024;
+const FRAGMENT_SIZE: usize = 8*1024;
 
 impl BondTcpListener {
     /// Creates a new `BndTcpListener` which will be bound to the specified address.
@@ -531,26 +531,31 @@ impl std::io::Read for BondTcpStream {
 impl std::io::Write for BondTcpStream {
 
 
-    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
-        log::debug!("Writing using stream {}", self.next_stream);
+    fn write(&mut self, buf: &[u8]) -> IoResult<usize> {        
         if buf.len() <= FRAGMENT_SIZE {
+            log::debug!("Writing in one shot using stream {}", self.next_stream);
             let len_bs = (buf.len() as u32).to_le_bytes();                        
             let _ = self.write_loop(&len_bs)?;
             let _ = self.write_loop(buf)?;            
+            self.next_stream = (self.next_stream +1 ) % self.streams.len();
         } else {            
+            log::debug!("Fragmenting write");
             let mut sup = FRAGMENT_SIZE;
-            let mut k = 0;
-            while sup < buf.len() {
+            let mut k = 0;                    
+            while sup < buf.len() {          
+                log::debug!("Writing fragment {k}");                      
                 let inf = k * FRAGMENT_SIZE;
                 k += 1;
                 sup = std::cmp::min(k*FRAGMENT_SIZE, buf.len());
+                log::debug!("Writing {} bytes on buf[{}..{}] on stream {}", sup - inf,  inf, sup, self.next_stream);
+                let len_bs = ((sup - inf) as u32).to_le_bytes();
+                let _ = self.write_loop(&len_bs)?;
                 let n = self.write_loop(&buf[inf..sup])?;
-                if n == 0 { return Ok(0) }                
+                if n == 0 { return Ok(0) }         
+                self.next_stream = (self.next_stream +1 ) % self.streams.len();                       
             }            
-        }
-        self.next_stream = (self.next_stream +1 ) % self.streams.len();
-        Ok(buf.len())
-         
+        }        
+        Ok(buf.len())         
     }
 
     fn flush(&mut self) -> IoResult<()> {
