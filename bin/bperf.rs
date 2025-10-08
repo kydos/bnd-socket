@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::{io::Read, io::Write, time::{Duration, Instant}};
+use tracing_subscriber::filter::EnvFilter;
 
 fn run_client_mode(args: Args) { 
 
@@ -50,8 +51,28 @@ fn run_server_mode(args: Args) {
     }   
 }
 
+fn init_env_filter(env_filter: EnvFilter) {
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_level(true)
+        .with_target(true);
+
+    let subscriber = subscriber.finish();
+    let _ = tracing::subscriber::set_global_default(subscriber);
+}
 
 fn main() { 
+
+     tracing_log::LogTracer::init().expect("Failed to set logger");
+    
+    // Initialize tracing subscriber
+     match EnvFilter::try_from_default_env() {
+        Ok(env_filter) => init_env_filter(env_filter),
+        _ => { }
+     }
+
     let args = Args::parse();
     if args.client {
         run_client_mode(args);

@@ -419,8 +419,9 @@ impl BondTcpStream {
                         
                         index += n;                    
                     }
+                    log::debug!("Index: {index} buf.len(): {}", buf.len());
                     if index == buf.len() {
-                        break;
+                        return Ok(buf.len())
                     }
                 }                                    
             }
@@ -522,7 +523,7 @@ impl std::io::Read for BondTcpStream {
                 log::debug!("Next read will be from stream: {}", self.next_stream);
             }
         }       
-        log::debug!("Read  {} bytes, next will read from stream {}/{}", buf.len(), self.next_stream, self.streams.len());
+        log::debug!("Read  {} bytes, next will read from stream {}/{}\n", buf.len(), self.next_stream, self.streams.len());
         
         Ok(buf.len())
     }

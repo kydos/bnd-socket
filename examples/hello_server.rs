@@ -39,8 +39,8 @@ fn main() -> std::io::Result<()> {
             if n == 0 {
                 println!("Socket close from remote party...");
                 break;
-            }
-            print!(".");
+            }  
+            print!(".")          
             // println!("Read {n} bytes:\n");
             // for b in buf.iter() {
             //     print!("{b}:");
