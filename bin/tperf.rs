@@ -43,7 +43,7 @@ fn run_server_mode(args: Args) {
                     let delta = start.elapsed();
                     if  delta >= sampling_period {
                         let throughput = ((total_recv * 8) as f32 / delta.as_secs_f32()) / ( 10u64.pow(6) as f32);                    
-                        println!("[{cid}]: {throughput} Gbps");
+                        println!("[{cid}]: {throughput} Mbps");
                         start = Instant::now();
                         total_recv = 0;
                     }
